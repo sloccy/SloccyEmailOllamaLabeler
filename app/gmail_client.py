@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import time
+import datetime
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import Flow
@@ -139,6 +140,26 @@ def trash_email(service, message_id: str):
         userId="me",
         id=message_id,
     ).execute()
+
+
+def fetch_emails_older_than(service, days: int, label_name: str = None) -> list:
+    """Return message IDs older than `days` days, optionally filtered by label."""
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    query = f"before:{cutoff.strftime('%Y/%m/%d')}"
+    if label_name:
+        query += f" label:{label_name}"
+    ids = []
+    page_token = None
+    while True:
+        kwargs = {"userId": "me", "q": query, "maxResults": 500}
+        if page_token:
+            kwargs["pageToken"] = page_token
+        resp = service.users().messages().list(**kwargs).execute()
+        ids.extend(m["id"] for m in resp.get("messages", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return ids
 
 
 def mark_email_read(service, message_id: str):

@@ -281,6 +281,57 @@ def api_generate_prompt():
         return jsonify({"error": "Generation failed. Check Ollama is running."}), 500
 
 
+# ---- Retention ----
+
+@app.route("/api/retention/<int:account_id>", methods=["GET"])
+def api_get_retention(account_id):
+    if not db.get_account(account_id):
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(db.get_retention(account_id))
+
+
+@app.route("/api/retention/<int:account_id>", methods=["POST"])
+def api_set_retention(account_id):
+    if not db.get_account(account_id):
+        return jsonify({"error": "Not found"}), 404
+    data = request.json
+    if data is None:
+        return jsonify({"error": "JSON body required."}), 400
+    global_days = data.get("global_days")
+    if global_days is None:
+        db.clear_global_retention(account_id)
+    else:
+        days = int(global_days)
+        if days < 1:
+            return jsonify({"error": "global_days must be at least 1"}), 400
+        db.set_global_retention(account_id, days)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/retention/<int:account_id>/labels", methods=["POST"])
+def api_add_label_retention(account_id):
+    if not db.get_account(account_id):
+        return jsonify({"error": "Not found"}), 404
+    data = request.json
+    if data is None:
+        return jsonify({"error": "JSON body required."}), 400
+    label_name = (data.get("label_name") or "").strip()
+    days = data.get("days")
+    if not label_name or days is None:
+        return jsonify({"error": "label_name and days are required"}), 400
+    days = int(days)
+    if days < 1:
+        return jsonify({"error": "days must be at least 1"}), 400
+    db.add_label_retention(account_id, label_name, days)
+    return jsonify({"ok": True}), 201
+
+
+@app.route("/api/retention/<int:account_id>/labels/<int:rule_id>", methods=["DELETE"])
+def api_delete_label_retention(account_id, rule_id):
+    db.delete_label_retention(rule_id)
+    return jsonify({"ok": True})
+
+
 # ---- History ----
 
 @app.route("/api/history", methods=["GET"])

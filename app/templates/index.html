@@ -198,6 +198,7 @@
       <div class="nav-item" data-page="settings" onclick="navigate('settings', this)"><span class="nav-icon">&#9633;</span> Settings</div>
       <div class="nav-item" data-page="logs" onclick="navigate('logs', this)"><span class="nav-icon">&#9645;</span> Logs</div>
       <div class="nav-item" data-page="history" onclick="navigate('history', this)"><span class="nav-icon">&#9699;</span> History</div>
+      <div class="nav-item" data-page="retention" onclick="navigate('retention', this)"><span class="nav-icon">&#9673;</span> Retention</div>
     </nav>
     <div class="sidebar-footer">
       <div class="status-pill">
@@ -455,6 +456,61 @@
       </div>
     </div>
 
+    <!-- Retention -->
+    <div class="page" id="page-retention">
+      <div class="page-header">
+        <div><div class="page-title">Retention</div><div class="page-sub">Automatically move old emails to Trash</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:24px;">
+        <label>Account</label>
+        <select id="retention-account-select" onchange="loadRetention()">
+          <option value="">Select an account…</option>
+        </select>
+      </div>
+      <div id="retention-content" style="display:none;max-width:620px;">
+        <!-- Global rule -->
+        <div class="card" style="margin-bottom:20px;">
+          <div class="form-title">Global Retention</div>
+          <div class="setting-row" style="padding-top:0;">
+            <div>
+              <div class="setting-label">Delete all emails older than</div>
+              <div class="setting-desc">Emails in any folder older than this will be moved to Trash on each scan. Leave disabled to skip.</div>
+            </div>
+            <div class="setting-control" style="display:flex;align-items:center;gap:10px;">
+              <input type="checkbox" id="retention-global-enabled" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;" onchange="toggleGlobalDaysInput()">
+              <input type="number" id="retention-global-days" min="1" step="1" placeholder="days" style="width:90px;text-align:right;" disabled>
+              <span style="font-size:13px;color:var(--muted);">days</span>
+            </div>
+          </div>
+          <div style="margin-top:14px;">
+            <button class="btn btn-primary btn-sm" onclick="saveGlobalRetention()">Save</button>
+          </div>
+        </div>
+
+        <!-- Label rules -->
+        <div class="card">
+          <div class="form-title">Label-Specific Retention</div>
+          <div id="label-retention-list"></div>
+          <hr class="divider">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="form-group" style="margin:0;flex:1;min-width:160px;">
+              <label for="new-retention-label">Gmail label name</label>
+              <input type="text" id="new-retention-label" placeholder="e.g. Newsletter">
+            </div>
+            <div class="form-group" style="margin:0;width:120px;">
+              <label for="new-retention-days">Delete after (days)</label>
+              <input type="number" id="new-retention-days" min="1" step="1" placeholder="30">
+            </div>
+            <button class="btn btn-primary btn-sm" style="margin-bottom:0;flex-shrink:0;" onclick="addLabelRetention()">Add Rule</button>
+          </div>
+        </div>
+      </div>
+      <div id="retention-empty" style="display:none;" class="empty">
+        <div class="empty-icon">&#9673;</div>
+        No accounts found. Add a Gmail account first.
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -479,6 +535,7 @@
     if (page === 'logs') loadLogs();
     if (page === 'dashboard') loadDashboard();
     if (page === 'history') loadHistoryFilters();
+    if (page === 'retention') loadRetentionAccounts();
   }
 
   // ---- Toast ----
@@ -1055,6 +1112,113 @@
         <td class="col-actions">${actionBadges || '<span style="color:var(--muted)">—</span>'}</td>
       </tr>`;
     }).join('');
+  }
+
+  // ---- Retention ----
+  async function loadRetentionAccounts() {
+    if (!_accounts.length) {
+      _accounts = await fetch('/api/accounts').then(r => r.json());
+    }
+    const sel = document.getElementById('retention-account-select');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Select an account…</option>' +
+      _accounts.map(a => `<option value="${a.id}" ${current == a.id ? 'selected' : ''}>${esc(a.email)}</option>`).join('');
+    if (!_accounts.length) {
+      document.getElementById('retention-empty').style.display = 'block';
+      document.getElementById('retention-content').style.display = 'none';
+    } else {
+      document.getElementById('retention-empty').style.display = 'none';
+      if (!sel.value && _accounts.length) {
+        sel.value = _accounts[0].id;
+      }
+      if (sel.value) loadRetention();
+    }
+  }
+
+  async function loadRetention() {
+    const accountId = document.getElementById('retention-account-select').value;
+    if (!accountId) {
+      document.getElementById('retention-content').style.display = 'none';
+      return;
+    }
+    document.getElementById('retention-content').style.display = 'block';
+    const data = await fetch(`/api/retention/${accountId}`).then(r => r.json());
+
+    const globalEnabled = document.getElementById('retention-global-enabled');
+    const globalDays = document.getElementById('retention-global-days');
+    if (data.global_days) {
+      globalEnabled.checked = true;
+      globalDays.disabled = false;
+      globalDays.value = data.global_days;
+    } else {
+      globalEnabled.checked = false;
+      globalDays.disabled = true;
+      globalDays.value = '';
+    }
+
+    renderLabelRetentionList(data.labels, accountId);
+  }
+
+  function toggleGlobalDaysInput() {
+    const enabled = document.getElementById('retention-global-enabled').checked;
+    document.getElementById('retention-global-days').disabled = !enabled;
+    if (!enabled) document.getElementById('retention-global-days').value = '';
+  }
+
+  async function saveGlobalRetention() {
+    const accountId = document.getElementById('retention-account-select').value;
+    if (!accountId) return;
+    const enabled = document.getElementById('retention-global-enabled').checked;
+    const days = parseInt(document.getElementById('retention-global-days').value, 10);
+    if (enabled && (!days || days < 1)) { toast('Enter a valid number of days.', 'error'); return; }
+    const body = enabled ? { global_days: days } : { global_days: null };
+    const r = await fetch(`/api/retention/${accountId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) { toast(enabled ? `Global retention set to ${days} day(s).` : 'Global retention disabled.'); }
+    else { const e = await r.json(); toast(e.error || 'Error', 'error'); }
+  }
+
+  function renderLabelRetentionList(labels, accountId) {
+    const el = document.getElementById('label-retention-list');
+    if (!labels.length) {
+      el.innerHTML = '<div class="empty" style="padding:20px 0 10px;"><div class="empty-icon" style="font-size:20px;">&#9673;</div>No label rules yet.</div>';
+      return;
+    }
+    el.innerHTML = labels.map(r => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+        <div>
+          <span class="tag">${esc(r.label_name)}</span>
+          <span style="font-size:13px;color:var(--muted);margin-left:10px;">→ trash after <strong style="color:var(--text);">${r.days}</strong> day${r.days === 1 ? '' : 's'}</span>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="deleteLabelRetention(${accountId}, ${r.id})">Remove</button>
+      </div>`).join('');
+  }
+
+  async function addLabelRetention() {
+    const accountId = document.getElementById('retention-account-select').value;
+    if (!accountId) return;
+    const label = document.getElementById('new-retention-label').value.trim();
+    const days = parseInt(document.getElementById('new-retention-days').value, 10);
+    if (!label) { toast('Enter a label name.', 'error'); return; }
+    if (!days || days < 1) { toast('Enter a valid number of days.', 'error'); return; }
+    const r = await fetch(`/api/retention/${accountId}/labels`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label_name: label, days }),
+    });
+    if (r.ok) {
+      document.getElementById('new-retention-label').value = '';
+      document.getElementById('new-retention-days').value = '';
+      toast(`Rule added: "${label}" → ${days} day(s).`);
+      loadRetention();
+    } else { const e = await r.json(); toast(e.error || 'Error', 'error'); }
+  }
+
+  async function deleteLabelRetention(accountId, ruleId) {
+    const r = await fetch(`/api/retention/${accountId}/labels/${ruleId}`, { method: 'DELETE' });
+    if (r.ok) { toast('Rule removed.'); loadRetention(); }
+    else { toast('Error removing rule.', 'error'); }
   }
 
   // ---- Helpers ----

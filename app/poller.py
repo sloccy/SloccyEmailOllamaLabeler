@@ -154,6 +154,38 @@ def _scan_account(account, prompts):
                 db.add_log("ERROR", f"[{email_addr}] Error processing email: {e}")
 
         db.update_last_scan(account_id)
+        _cleanup_retention(account, service)
 
     except Exception as e:
         db.add_log("ERROR", f"[{email_addr}] Scan failed: {e}")
+
+
+def _cleanup_retention(account, service):
+    account_id = account["id"]
+    email_addr = account["email"]
+    try:
+        retention = db.get_retention(account_id)
+        trashed_ids = set()
+
+        # Per-label rules first (more specific, typically shorter retention)
+        for rule in retention["labels"]:
+            ids = gmail_client.fetch_emails_older_than(service, rule["days"], rule["label_name"])
+            newly_trashed = 0
+            for msg_id in ids:
+                if msg_id not in trashed_ids:
+                    gmail_client.trash_email(service, msg_id)
+                    trashed_ids.add(msg_id)
+                    newly_trashed += 1
+            if newly_trashed:
+                db.add_log("INFO", f"[{email_addr}] Retention: trashed {newly_trashed} email(s) with label '{rule['label_name']}' older than {rule['days']} day(s).")
+
+        # Global rule (skip already-trashed)
+        if retention["global_days"]:
+            ids = gmail_client.fetch_emails_older_than(service, retention["global_days"])
+            new_ids = [i for i in ids if i not in trashed_ids]
+            for msg_id in new_ids:
+                gmail_client.trash_email(service, msg_id)
+            if new_ids:
+                db.add_log("INFO", f"[{email_addr}] Retention: trashed {len(new_ids)} email(s) older than {retention['global_days']} day(s) (global rule).")
+    except Exception as e:
+        db.add_log("ERROR", f"[{email_addr}] Retention cleanup failed: {e}")

@@ -84,6 +84,19 @@ def init_db():
                 actions TEXT DEFAULT ''
             );
 
+            CREATE TABLE IF NOT EXISTS account_retention (
+                account_id INTEGER PRIMARY KEY,
+                global_days INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS label_retention (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL,
+                label_name TEXT NOT NULL,
+                days INTEGER NOT NULL,
+                UNIQUE(account_id, label_name)
+            );
+
             -- Create indexes for better performance
             CREATE INDEX IF NOT EXISTS idx_processed_emails_account_id ON processed_emails(account_id);
             CREATE INDEX IF NOT EXISTS idx_processed_emails_message_id ON processed_emails(message_id);
@@ -115,6 +128,8 @@ def _migrate():
         "ALTER TABLE prompts ADD COLUMN sort_order INTEGER DEFAULT 0",
         "ALTER TABLE prompts ADD COLUMN stop_processing INTEGER DEFAULT 0",
         "ALTER TABLE prompts ADD COLUMN account_id INTEGER DEFAULT NULL",
+        "CREATE TABLE IF NOT EXISTS account_retention (account_id INTEGER PRIMARY KEY, global_days INTEGER)",
+        "CREATE TABLE IF NOT EXISTS label_retention (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER NOT NULL, label_name TEXT NOT NULL, days INTEGER NOT NULL, UNIQUE(account_id, label_name))",
     ]
     with get_db() as conn:
         for sql in migrations:
@@ -318,6 +333,49 @@ def add_categorization(account_id, account_email, message_id, subject, sender,
             (account_id, account_email, message_id, subject, sender,
              prompt_id, prompt_name, label_name, actions),
         )
+
+
+# ---- Retention Rules ----
+
+def get_retention(account_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT global_days FROM account_retention WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        labels = conn.execute(
+            "SELECT id, label_name, days FROM label_retention WHERE account_id = ? ORDER BY id ASC",
+            (account_id,),
+        ).fetchall()
+    return {
+        "global_days": row["global_days"] if row else None,
+        "labels": [dict(r) for r in labels],
+    }
+
+
+def set_global_retention(account_id, days):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO account_retention (account_id, global_days) VALUES (?, ?)",
+            (account_id, days),
+        )
+
+
+def clear_global_retention(account_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM account_retention WHERE account_id = ?", (account_id,))
+
+
+def add_label_retention(account_id, label_name, days):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO label_retention (account_id, label_name, days) VALUES (?, ?, ?)",
+            (account_id, label_name, days),
+        )
+
+
+def delete_label_retention(rule_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM label_retention WHERE id = ?", (rule_id,))
 
 
 def get_categorization_history(account_id=None, prompt_id=None,
